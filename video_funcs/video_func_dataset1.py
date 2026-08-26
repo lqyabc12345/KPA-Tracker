@@ -449,7 +449,7 @@ if __name__ == '__main__':
 
     # vis = o3d.visualization.Visualizer()
     # vis.create_window()
-    # coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5)
+    # coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
     # vis.add_geometry(coord_pcd)
     rt_key = [_ for _ in range(num_parts)]
     r_key = [_ for _ in range(num_parts)]
@@ -458,6 +458,8 @@ if __name__ == '__main__':
     turns = 0
     video_num = 0
     for i, data in enumerate(test_dataloader):
+        if i>=3:
+        	break
         turns += 1
         cloud = []
         clouds, norm_part_pts, gt_part_cls, gt_part_r, gt_part_quat, gt_part_t, gt_joint_state, gt_norm_joint_loc, gt_norm_joint_axis, \
@@ -541,7 +543,10 @@ if __name__ == '__main__':
             cloud_pcd.points = o3d.utility.Vector3dVector(clouds[part_idx])
             cloud_pcd.transform(np.linalg.inv(rt_key[part_idx]))
             cloud_pcd.transform(base_fix_rt)
-            cloud_pcd.paint_uniform_color([1., 0., 0.])
+            if part_idx == 0:
+                cloud_pcd.paint_uniform_color([1., 0., 0.])
+            else:
+                cloud_pcd.paint_uniform_color([0., 1., 0.])
             cloud_pcds.append(cloud_pcd)
             clouds[part_idx] = np.asarray(cloud_pcd.points)
             if part_idx not in [0, sort_part]:
@@ -563,7 +568,7 @@ if __name__ == '__main__':
 
         model.eval()
 
-        coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5)
+        coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
 
         gt_norm_kp = gt_norm_part_kp[0].cpu().numpy()
         gt_trans_part_kp = [_ for _ in range(num_parts)]
@@ -780,10 +785,11 @@ if __name__ == '__main__':
     print(f"cam base t error mean:{cam_base_t_error_all/turns}")
     print(f"cam child t error mean:{cam_sort_child_t_error_all/turns}")
     print()
-    print(f"last cam base r error mean:{last_cam_base_r_error_all/video_num}")
-    print(f"last cam child r error mean:{last_cam_sort_child_r_error_all/video_num}")
-    print(f"last cam base t error mean:{last_cam_base_t_error_all/video_num}")
-    print(f"last cam child t error mean:{last_cam_sort_child_t_error_all/video_num}")
+    if video_num > 0:
+        print(f"last cam base r error mean:{last_cam_base_r_error_all/video_num}")
+        print(f"last cam child r error mean:{last_cam_sort_child_r_error_all/video_num}")
+        print(f"last cam base t error mean:{last_cam_base_t_error_all/video_num}")
+        print(f"last cam child t error mean:{last_cam_sort_child_t_error_all/video_num}")
     print()
 
 
