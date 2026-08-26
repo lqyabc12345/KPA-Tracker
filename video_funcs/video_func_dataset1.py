@@ -775,6 +775,42 @@ if __name__ == '__main__':
     print(f"initial base t error mean:{ini_base_t_error_all/turns}")
     print(f"initial child t error mean:{ini_sort_child_t_error_all/turns}")
     print()
+
+    result_path = osp.join(opt.work_dir, "failure_analysis_result.txt")
+
+    with open(result_path, "a") as f:
+
+        f.write("\n====================\n")
+        f.write(f"data_tag: {opt.data_tag}\n")
+        f.write(f"num_points: {opt.num_points}\n")
+        f.write(f"num_kp: {opt.num_kp}\n\n")
+
+
+        f.write(
+            f"initial base r: {ini_base_r_error_all/turns}\n"
+        )
+
+        f.write(
+            f"initial child r: {ini_sort_child_r_error_all/turns}\n"
+        )
+
+
+        f.write(
+            f"new base r: {new_base_r_error_all/turns}\n"
+        )
+
+        f.write(
+            f"new child r: {new_sort_child_r_error_all/turns}\n"
+        )
+
+
+        f.write(
+            f"new base t: {new_base_t_error_all/turns}\n"
+        )
+
+        f.write(
+            f"new child t: {new_sort_child_t_error_all/turns}\n"
+        )
     print(f"new base r error mean:{new_base_r_error_all/turns}")
     print(f"new child r error mean:{new_sort_child_r_error_all/turns}")
     print(f"new base t error mean:{new_base_t_error_all/turns}")
