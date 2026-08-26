@@ -1,4 +1,5 @@
 import math
+import csv
 import time
 import open3d as o3d
 import torch
@@ -776,41 +777,48 @@ if __name__ == '__main__':
     print(f"initial child t error mean:{ini_sort_child_t_error_all/turns}")
     print()
 
-    result_path = osp.join(opt.work_dir, "failure_analysis_result.txt")
-
-    with open(result_path, "a") as f:
-
-        f.write("\n====================\n")
-        f.write(f"data_tag: {opt.data_tag}\n")
-        f.write(f"num_points: {opt.num_points}\n")
-        f.write(f"num_kp: {opt.num_kp}\n\n")
+    csv_path = osp.join(
+        "failure_analysis",
+        "results",
+        "results.csv"
+    )
 
 
-        f.write(
-            f"initial base r: {ini_base_r_error_all/turns}\n"
-        )
-
-        f.write(
-            f"initial child r: {ini_sort_child_r_error_all/turns}\n"
-        )
+    file_exists = osp.exists(csv_path)
 
 
-        f.write(
-            f"new base r: {new_base_r_error_all/turns}\n"
-        )
+    with open(csv_path, "a", newline="") as f:
 
-        f.write(
-            f"new child r: {new_sort_child_r_error_all/turns}\n"
-        )
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow([
+                "data_tag",
+                "num_points",
+                "num_kp",
+                "initial_base_r",
+                "initial_child_r",
+                "new_base_r",
+                "new_child_r",
+                "new_base_t",
+                "new_child_t"
+            ])
 
 
-        f.write(
-            f"new base t: {new_base_t_error_all/turns}\n"
-        )
+        writer.writerow([
+            opt.data_tag,
+            opt.num_points,
+            opt.num_kp,
 
-        f.write(
-            f"new child t: {new_sort_child_t_error_all/turns}\n"
-        )
+            ini_base_r_error_all / turns,
+            ini_sort_child_r_error_all / turns,
+
+            new_base_r_error_all / turns,
+            new_sort_child_r_error_all / turns,
+
+            new_base_t_error_all / turns,
+            new_sort_child_t_error_all / turns
+        ])
     print(f"new base r error mean:{new_base_r_error_all/turns}")
     print(f"new child r error mean:{new_sort_child_r_error_all/turns}")
     print(f"new base t error mean:{new_base_t_error_all/turns}")
