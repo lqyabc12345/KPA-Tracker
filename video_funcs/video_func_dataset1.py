@@ -777,15 +777,36 @@ if __name__ == '__main__':
     print(f"initial child t error mean:{ini_sort_child_t_error_all/turns}")
     print()
 
-    csv_path = osp.join(
+    # project_root = osp.abspath(
+    #     osp.join(osp.dirname(__file__), "..")
+    # )
+    
+    project_root = os.getcwd()
+
+    csv_dir = osp.join(
+        project_root,
         "failure_analysis",
-        "results",
-        "results.csv"
+        "results"
     )
+    csv_path = osp.join(
+        csv_dir,
+        "results.csv"
+    )    
+    
+    os.makedirs(
+        osp.dirname(csv_path),
+        exist_ok=True
+    )
+   
+
+    print("当前工作目录:", os.getcwd())
+    print("项目根目录:", project_root)
+    print("CSV保存位置:", csv_path)
 
 
-    file_exists = osp.exists(csv_path)
 
+
+    file_exists = (osp.exists(csv_path) and osp.getsize(csv_path) > 0)
 
     with open(csv_path, "a", newline="") as f:
 
@@ -796,29 +817,23 @@ if __name__ == '__main__':
                 "data_tag",
                 "num_points",
                 "num_kp",
-                "initial_base_r",
-                "initial_child_r",
                 "new_base_r",
                 "new_child_r",
                 "new_base_t",
                 "new_child_t"
             ])
 
-
         writer.writerow([
             opt.data_tag,
             opt.num_points,
             opt.num_kp,
-
-            ini_base_r_error_all / turns,
-            ini_sort_child_r_error_all / turns,
-
             new_base_r_error_all / turns,
             new_sort_child_r_error_all / turns,
-
             new_base_t_error_all / turns,
             new_sort_child_t_error_all / turns
         ])
+
+    print("CSV保存位置:", csv_path)
     print(f"new base r error mean:{new_base_r_error_all/turns}")
     print(f"new child r error mean:{new_sort_child_r_error_all/turns}")
     print(f"new base t error mean:{new_base_t_error_all/turns}")

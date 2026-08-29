@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Compiled extensions
+*.so
+*.o
+
+# Build artifacts
+build/
+dist/
+*.egg
+*.egg-info/
+
+# VS Code
+.vscode/
+
+# Backup files
+*.bak
+
+# Dataset
+dataset1/
+
+# Experiment outputs
+work_dir/
+
+# Model checkpoints
+*.pth
+*.pt
+*.ckpt
+
+# Generated pickle results
+*.pkl
