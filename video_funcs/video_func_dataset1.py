@@ -1,11 +1,17 @@
+import os
+import os.path as osp
+
+PROJECT_ROOT = osp.dirname(
+    osp.dirname(osp.abspath(__file__))
+)
+
 import math
 import csv
 import time
 import open3d as o3d
 import torch
 import numpy as np
-import os
-import os.path as osp
+
 import argparse
 import mmcv
 import xml.etree.ElementTree as ET
@@ -37,9 +43,9 @@ have: T0
 CLASSES = ['laptop', 'eyeglasses', 'dishwasher', 'drawer', 'scissors']
 
 def rot_diff_rad(rot1, rot2):
-    if np.abs((np.trace(np.matmul(rot1, rot2.T)) - 1) / 2) > 1.:
-        print('Something wrong in rotation error!')
-    return np.arccos((np.trace(np.matmul(rot1, rot2.T)) - 1) / 2) % (2*np.pi)
+    cos_theta = (np.trace(np.matmul(rot1, rot2.T)) - 1) / 2
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    return np.arccos(cos_theta)
 
 def RotateAnyAxis(v1, v2, step):
     axis = v2 - v1
@@ -370,7 +376,13 @@ if __name__ == '__main__':
     parser.add_argument('--use_pn', action='store_true')
     parser.add_argument('--use_initial', action='store_true', help='wheter to use initial prediction without refinement')
     opt = parser.parse_args()
+    seed = 0
 
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     num_parts = opt.num_parts
     device = torch.device("cuda:0")
     urdf_dir = f'{opt.data_dir}/{CLASSES[opt.cate_id-1]}/urdf'
@@ -437,6 +449,7 @@ if __name__ == '__main__':
     new_sort_child_r_error_all = 0.
     new_base_t_error_all = 0.
     new_sort_child_t_error_all = 0.
+    new_r_valid_count = 0
 
     cam_base_r_error_all = 0.
     cam_sort_child_r_error_all = 0.
@@ -458,9 +471,11 @@ if __name__ == '__main__':
     key_j_state = torch.tensor(0.)
     turns = 0
     video_num = 0
+    per_frame_results = []
+    filtered_count = 0
+
     for i, data in enumerate(test_dataloader):
-        if i>=3:
-        	break
+
         turns += 1
         cloud = []
         clouds, norm_part_pts, gt_part_cls, gt_part_r, gt_part_quat, gt_part_t, gt_joint_state, gt_norm_joint_loc, gt_norm_joint_axis, \
@@ -648,23 +663,30 @@ if __name__ == '__main__':
                         for joint_idx in range(num_parts-1)]
         
         errs = calErr(pred_r_list, pred_t_list, gt_part_r, gt_part_t, sort_part)
-        base_r_err = errs[0][0]
-        ini_base_r_error_all += base_r_err
-        child_r_err = errs[0][1]
-        ini_sort_child_r_error_all += child_r_err
-        if base_r_err > 30:
+        ini_base_r_err = errs[0][0]
+        ini_child_r_err = errs[0][1]
+
+        if ini_base_r_err > 30:
+            filtered_count += 1
             turns -= 1
             continue
-        print(f'sort part: {sort_part}')
-        print(f'ini base r_err: {base_r_err}')
-        print(f'ini child r_err: {child_r_err}')
+            
+        ini_base_r_error_all += ini_base_r_err
+        
+        ini_sort_child_r_error_all += ini_child_r_err
 
-        base_t_err = errs[1][0]
-        ini_base_t_error_all += base_t_err
-        child_t_err = errs[1][1]
-        ini_sort_child_t_error_all += child_t_err
-        print(f'ini base t_err: {base_t_err}')
-        print(f'ini child t_err: {child_t_err}')
+
+
+        print(f'sort part: {sort_part}')
+        print(f'ini base r_err: {ini_base_r_err}')
+        print(f'ini child r_err: {ini_child_r_err}')
+
+        ini_base_t_err = errs[1][0]
+        ini_base_t_error_all += ini_base_t_err
+        ini_child_t_err = errs[1][1]
+        ini_sort_child_t_error_all += ini_child_t_err
+        print(f'ini base t_err: {ini_base_t_err}')
+        print(f'ini child t_err: {ini_child_t_err}')
 
         norm_part_pts = norm_part_pts[0].cpu().numpy()
 
@@ -709,20 +731,24 @@ if __name__ == '__main__':
         new_pred_t = optimize_result['pred_t_list']
         new_pred_rt = optimize_result['pred_rt_list']
         new_errs = calErr(new_pred_r, new_pred_t, gt_part_r, gt_part_t, sort_part)
-        base_r_err = new_errs[0][0]
-        child_r_err = new_errs[0][1]
-        if not (np.isnan(base_r_err) or np.isnan(child_r_err)):
-            new_sort_child_r_error_all += child_r_err
-            new_base_r_error_all += base_r_err
-            print(f'new base r_err: {base_r_err}')
-            print(f'new child r_err: {child_r_err}')
 
-        base_t_err = new_errs[1][0]
-        new_base_t_error_all += base_t_err
-        child_t_err = new_errs[1][1]
-        new_sort_child_t_error_all += child_t_err
-        print(f'new base t_err: {base_t_err}')
-        print(f'new child t_err: {child_t_err}')
+        new_base_r_err = new_errs[0][0]
+        new_child_r_err = new_errs[0][1]
+        new_base_t_err = new_errs[1][0]
+        new_child_t_err = new_errs[1][1]
+        if not (np.isnan(new_base_r_err) or np.isnan(new_child_r_err)):
+            new_sort_child_r_error_all += new_child_r_err
+            new_base_r_error_all += new_base_r_err
+            new_r_valid_count += 1
+
+        new_base_t_error_all += new_base_t_err
+        new_sort_child_t_error_all += new_child_t_err
+        print(f'new base r_err: {new_base_r_err}')
+        print(f'new child r_err: {new_child_r_err}')
+        print(f'new base t_err: {new_base_t_err}')
+        print(f'new child t_err: {new_child_t_err}')
+
+
         
         pred_cam_rt = [np.matmul(rt_key[part_idx], new_pred_rt[part_idx])
                         for part_idx in range(num_parts)]
@@ -741,6 +767,29 @@ if __name__ == '__main__':
         cam_base_t_err = cam_errs[1][0]
         cam_base_t_error_all += cam_base_t_err
         cam_child_t_err = cam_errs[1][1]
+        per_frame_results.append([
+            i,
+            inner_index,
+            key_dis,
+            int(urdf_id[0].cpu().numpy()),
+
+            ini_base_r_err,
+            ini_child_r_err,
+            ini_base_t_err,
+            ini_child_t_err,
+
+            new_base_r_err,
+            new_child_r_err,
+            new_base_t_err,
+            new_child_t_err,
+
+            cam_base_r_err,
+            cam_child_r_err,
+            cam_base_t_err,
+            cam_child_t_err
+        ])
+
+
         cam_sort_child_t_error_all += cam_child_t_err
         print(f'cam base t_err: {cam_base_t_err}')
         print(f'cam child t_err: {cam_child_t_err}')
@@ -770,6 +819,73 @@ if __name__ == '__main__':
                 t_key[part_idx] = rt_key[part_idx][:3, 3]
 
     # vis.destory_window()
+    print("per_frame_results:")
+    print(per_frame_results)
+    per_frame_csv_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "per_frame_results.csv"
+    )
+
+    os.makedirs(
+        osp.dirname(per_frame_csv_path),
+        exist_ok=True
+    )
+
+    with open(per_frame_csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "sample_id",
+            "frame_id",
+            "key_dis",
+            "urdf_id",
+            "num_points",
+            "num_kp",
+
+            "ini_base_r",
+            "ini_child_r",
+            "ini_base_t",
+            "ini_child_t",
+
+            "new_base_r",
+            "new_child_r",
+            "new_base_t",
+            "new_child_t",
+
+            "cam_base_r",
+            "cam_child_r",
+            "cam_base_t",
+            "cam_child_t"
+        ])
+
+        for row in per_frame_results:
+            writer.writerow([
+                row[0],          # sample_id
+                row[1],          # frame_id
+                row[2],          # key_dis
+                row[3],          # urdf_id
+
+                opt.num_points,
+                opt.num_kp,
+
+                row[4],          # ini_base_r
+                row[5],          # ini_child_r
+                row[6],          # ini_base_t
+                row[7],          # ini_child_t
+
+                row[8],          # new_base_r
+                row[9],          # new_child_r
+                row[10],         # new_base_t
+                row[11],         # new_child_t
+
+                row[12],         # cam_base_r
+                row[13],         # cam_child_r
+                row[14],         # cam_base_t
+                row[15]          # cam_child_t
+            ])
+    print("Per-frame CSV保存位置:", per_frame_csv_path)
     print(f'turn:{turns}')
     print(f"initial base r error mean:{ini_base_r_error_all/turns}")
     print(f"initial child r error mean:{ini_sort_child_r_error_all/turns}")
@@ -781,7 +897,7 @@ if __name__ == '__main__':
     #     osp.join(osp.dirname(__file__), "..")
     # )
     
-    project_root = os.getcwd()
+    project_root = PROJECT_ROOT
 
     csv_dir = osp.join(
         project_root,
@@ -827,15 +943,16 @@ if __name__ == '__main__':
             opt.data_tag,
             opt.num_points,
             opt.num_kp,
-            new_base_r_error_all / turns,
-            new_sort_child_r_error_all / turns,
+            new_base_r_error_all / new_r_valid_count,
+            new_sort_child_r_error_all / new_r_valid_count,
             new_base_t_error_all / turns,
             new_sort_child_t_error_all / turns
         ])
 
     print("CSV保存位置:", csv_path)
-    print(f"new base r error mean:{new_base_r_error_all/turns}")
-    print(f"new child r error mean:{new_sort_child_r_error_all/turns}")
+    if new_r_valid_count > 0:
+        print(f"new base r error mean:{new_base_r_error_all/new_r_valid_count}")
+        print(f"new child r error mean:{new_sort_child_r_error_all/new_r_valid_count}")
     print(f"new base t error mean:{new_base_t_error_all/turns}")
     print(f"new child t error mean:{new_sort_child_t_error_all/turns}")
     print()
@@ -850,7 +967,7 @@ if __name__ == '__main__':
         print(f"last cam base t error mean:{last_cam_base_t_error_all/video_num}")
         print(f"last cam child t error mean:{last_cam_sort_child_t_error_all/video_num}")
     print()
-
+    print(f"filtered frames (ini_base_r > 30): {filtered_count}")
 
 
 
