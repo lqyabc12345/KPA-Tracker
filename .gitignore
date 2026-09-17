@@ -31,3 +31,14 @@ work_dir/
 
 # Generated pickle results
 *.pkl
+
+# Failure analysis raw outputs
+failure_analysis/results/*.log
+failure_analysis/results/*.npy
+failure_analysis/results/*_per_frame.csv
+
+# Temporary files
+*°failure_analysis/results/results.csv
+failure_analysis/results/per_frame_results.csv
+failure_analysis/results/results.csv
+failure_analysis/results/per_frame_results.csv

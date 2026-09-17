@@ -1,0 +1,1 @@
+Motion magnitude alone is insufficient to represent keypoint usefulness. Correlation between keypoint motion and joint motion provides a stronger indicator of articulation observability.

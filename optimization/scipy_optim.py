@@ -23,14 +23,26 @@ class Optim():
         self.line_pcds = []
         self.isFranka = isFranka
         self.isDebug = isDebug
+        self.last_base_residuals = None
+        self.last_child_residuals = None
+        self.last_child_pre_residuals = None
+
+        self.last_child_pre_vectors = None
+
+
+        self.keypoint_weights = None
+
         self.pri_idx = [4] if isArtImage else [3, 4]
+
+
+
 
     def RotateAnyAxis_np(self, v1, v2, step):
         axis = v2 - v1
         axis = axis / np.linalg.norm(axis)
 
         a, b, c = v1[0], v1[1], v1[2]
-        u, v, w = axis[0], axis[1], axis[2] 
+        u, v, w = axis[0], axis[1], axis[2]
 
         cos = np.cos(-step)
         sin = np.sin(-step)
@@ -91,27 +103,114 @@ class Optim():
                                        1 - 2 * b * b - 2 * c * c]).reshape(3, 3)
         base_dis = np.linalg.norm((base_rot_matrix @ (base_norm_kp + base_t).T).T - base_pred_kp, axis=-1)
         return base_dis
-    
+
 
     def child_dif_func(self, state, norm_kp, pred_kp):
-        child_dis_list = []
-        for part_idx in range(1, self.num_parts):
-            joint_idx = part_idx - 1
-            child_rt = self.former_rt_child_state(state[joint_idx], joint_idx)
-            child_dis = np.linalg.norm((child_rt[:3, :3] @ (norm_kp[part_idx] + child_rt[:3, 3]).T).T - pred_kp[part_idx], axis=-1)
-            if joint_idx == 5:
-                child_dis *= 0.2
-            child_dis_list.append(child_dis)
-        all_child_dis = np.concatenate(child_dis_list)
 
-        return all_child_dis
-    
+        child_dis_list=[]
+        child_vec_list=[]
+
+        for part_idx in range(1,self.num_parts):
+
+            joint_idx=part_idx-1
+
+            child_rt=self.former_rt_child_state(
+                state[joint_idx],
+                joint_idx
+            )
+
+            child_vec = (
+                (child_rt[:3,:3] @
+                (norm_kp[part_idx]+child_rt[:3,3]).T
+                ).T
+                -
+                pred_kp[part_idx]
+            )
+
+            child_vec_list.append(child_vec)
+
+            child_dis=np.linalg.norm(
+                child_vec,
+                axis=-1
+            )
+
+            # ============================
+            # E13C adaptive keypoint weight
+            # ============================
+
+            if self.keypoint_weights is not None:
+
+                weight = self.keypoint_weights
+
+
+                # safety check:
+                # child_dis only contains child keypoints
+                # for laptop:
+                # child_dis.shape = (4,)
+                # while online weight may contain all keypoints (8,)
+                if weight.shape[0] != child_dis.shape[0]:
+
+                    # laptop:
+                    # total keypoints = 8
+                    # child keypoints = 4
+                    # use the first child keypoint weights
+                    weight = weight[:child_dis.shape[0]]
+
+                # print(
+                #     "DEBUG E13 weight:",
+                #     child_dis.shape,
+                #     weight.shape
+                # )
+
+                child_dis = child_dis * weight
+
+            child_dis_list.append(child_dis)
+
+
+        self.last_child_pre_vectors = np.concatenate(
+            child_vec_list,
+            axis=0
+        )
+        return np.concatenate(child_dis_list)
+
+    # def child_residual_vectors(self,state,norm_kp,pred_kp):
+    #     child_dis_list = []
+    #     child_vec_list=[]
+    #     for part_idx in range(1, self.num_parts):
+    #         joint_idx = part_idx - 1
+    #         child_rt = self.former_rt_child_state(state[joint_idx], joint_idx)
+
+    #         child_vec = (
+    #             (child_rt[:3,:3] @
+    #             (norm_kp[part_idx]+child_rt[:3,3]).T
+    #             ).T
+    #             -
+    #             pred_kp[part_idx]
+    #         )
+    #         child_vec_list.append(child_vec)
+
+    #         child_dis = np.linalg.norm((child_rt[:3, :3] @ (norm_kp[part_idx] + child_rt[:3, 3]).T).T - pred_kp[part_idx], axis=-1)
+    #         if joint_idx == 5:
+    #             child_dis *= 0.2
+    #         child_dis_list.append(child_dis)
+    #     all_child_dis = np.concatenate(child_dis_list)
+
+    #     return np.concatenate(
+    #         child_vec_list,
+    #         axis=0
+    #     )
+
+
+
+
+
     def optim_func(self, init_base_r, init_base_t, state, norm_kp, pred_kp):
         x, y, z, w = R.from_matrix(init_base_r).as_quat()
         base_r_quat = np.array([w, x, y, z])
         init_base_param = np.concatenate([base_r_quat, init_base_t])
 
         res_base = least_squares(self.base_dif_func, init_base_param, loss='soft_l1', args=(norm_kp[0], pred_kp[0]))
+        self.last_base_residuals = np.asarray(res_base.fun).copy()
         new_base_param = res_base.x
         new_base_quat, new_base_t = new_base_param[:4], new_base_param[4:]
         a, b, c, d = new_base_quat[0], new_base_quat[1], new_base_quat[2], new_base_quat[3]  # q=a+bi+ci+di
@@ -129,10 +228,24 @@ class Optim():
             _pcd2 = visual(pred_kp[0])
             _pcd2.paint_uniform_color([1., 0., 0.])
             coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5)
-        
+
+        pre_res = self.child_dif_func(
+            state,
+            norm_kp,
+            pred_kp
+        )
+
+        self.last_child_pre_residuals = np.asarray(
+            pre_res
+        ).copy()
+
+        self.last_child_pre_vectors = np.asarray(
+            self.last_child_pre_vectors
+        ).copy()
+
         res_child = least_squares(self.child_dif_func, state, loss='soft_l1', f_scale=0.1, args=(norm_kp, pred_kp))
         new_joint_state = res_child.x
-        
+        self.last_child_residuals = np.asarray(res_child.fun).copy()
         if self.isDebug:
             pts_child_rts = []
             for joint_idx in range(self.num_joints):
@@ -152,7 +265,7 @@ class Optim():
             pred_t_list = [new_base_transform[:3, -1]] + [
                             (pts_child_rts[joint_idx] @ new_base_transform)[:3, -1]
                             for joint_idx in range(self.num_joints)]
-            
+
             pcds1 = []
             pcds2 = []
             for part_idx in range(self.num_parts):

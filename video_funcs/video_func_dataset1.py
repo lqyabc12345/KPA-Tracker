@@ -32,6 +32,7 @@ import copy
 import cv2
 from libs.utils import iou_3d, get_part_bbox_from_kp, get_part_bbox_from_corners
 from optimization.scipy_optim import Optim
+from failure_analysis.weight_utils import compute_online_weight
 from libs.utils import calc_joint_errors
 
 #Consolas, 'Courier New', monospace
@@ -52,7 +53,7 @@ def RotateAnyAxis(v1, v2, step):
     axis = axis / torch.norm(axis)
 
     a, b, c = v1[0], v1[1], v1[2]
-    u, v, w = axis[0], axis[1], axis[2] 
+    u, v, w = axis[0], axis[1], axis[2]
 
     cos = torch.cos(-step)
     sin = torch.sin(-step)
@@ -72,7 +73,7 @@ def RotateAnyAxis_np(v1, v2, step):
     axis = axis / np.linalg.norm(axis)
 
     a, b, c = v1[0], v1[1], v1[2]
-    u, v, w = axis[0], axis[1], axis[2] 
+    u, v, w = axis[0], axis[1], axis[2]
 
     cos = np.cos(-step)
     sin = np.sin(-step)
@@ -95,7 +96,7 @@ def visual(kp):
     pcd.points = o3d.utility.Vector3dVector(kp.reshape(-1, 3))
     return pcd
 
-def get_vis_resource(index, result, norm_kp, model, opt, device, complete_all_mesh_pts, fathest_sampler): # no_concat
+def get_vis_resource(index, result, norm_kp, model, opt, device, complete_all_mesh_pts, fathest_sampler,adaptive_weight=None): # no_concat
 
     pred_cls = result['pred_cls']
     pred_base_r = result['pred_base_r']
@@ -136,9 +137,73 @@ def get_vis_resource(index, result, norm_kp, model, opt, device, complete_all_me
 
 
     scipy_optim = Optim(opt.num_parts, gt_norm_joint_loc, gt_norm_joint_axis, opt.cate_id, isDebug=opt.show_omad)
-    base_transform, pred_trans_joint_params_all, new_pred_joint_state = \
-        scipy_optim.optim_func(init_base_r, init_base_t, init_joint_state, norm_kp, pred_trans_part_kp)
-    
+
+    # scipy_optim.keypoint_weights = np.array(
+    #     [1.0,0.8,1.0,0.8]
+    # )
+
+    # scipy_optim.keypoint_weights = np.array(
+    #     [0.8,1.0,0.8,1.0]
+    # )
+
+
+    # ==========================
+    # E13 weight input
+    # ==========================
+
+    if adaptive_weight is not None:
+        scipy_optim.keypoint_weights = adaptive_weight
+    else:
+        scipy_optim.keypoint_weights = np.ones(
+            opt.num_kp
+        )
+    # if opt.weight_mode == "e13c" and index < 10:
+        # print(
+        #     "DEBUG E13 frame",
+        #     index,
+        #     "weight:",
+        #     scipy_optim.keypoint_weights
+        # )
+
+    base_transform, pred_trans_joint_params_all, new_pred_joint_state = scipy_optim.optim_func(init_base_r, init_base_t, init_joint_state, norm_kp, pred_trans_part_kp)
+
+
+    base_kp_residuals = scipy_optim.last_base_residuals
+    child_kp_residuals = scipy_optim.last_child_residuals
+    child_kp_pre_residuals = scipy_optim.last_child_pre_residuals
+    child_kp_pre_vectors = scipy_optim.last_child_pre_vectors
+
+    # print(
+    #     "child residual:",
+    #     child_kp_pre_residuals
+    # )
+    # print(
+    #     "DEBUG kp residual length:",
+    #     len(child_kp_pre_residuals)
+    # )
+    child_kp_pre_res_mean = float(
+        np.mean(child_kp_pre_residuals)
+    )
+
+    child_kp_pre_res_max = float(
+        np.max(child_kp_pre_residuals)
+    )
+
+    child_kp_pre_res_std = float(
+        np.std(child_kp_pre_residuals)
+    )
+
+
+
+    base_kp_res_mean = float(np.mean(base_kp_residuals))
+    base_kp_res_max = float(np.max(base_kp_residuals))
+    base_kp_res_std = float(np.std(base_kp_residuals))
+
+    child_kp_res_mean = float(np.mean(child_kp_residuals))
+    child_kp_res_max = float(np.max(child_kp_residuals))
+    child_kp_res_std = float(np.std(child_kp_residuals))
+
+
     pts_child_rts = []
     for joint_idx in range(num_joints):
         start_point = pred_trans_joint_params_all[0][joint_idx]
@@ -191,10 +256,26 @@ def get_vis_resource(index, result, norm_kp, model, opt, device, complete_all_me
     result_dict['nodes_list'] = np.stack(nodes_list, axis=0)
     result_dict['pred_trans_joint_params_all'] = [pred_trans_joint_params_all[0], pred_trans_joint_params_all[1]]
     result_dict['new_pred_joint_state'] = new_pred_joint_state
+    result_dict['base_kp_res_mean'] = base_kp_res_mean
+    result_dict['base_kp_res_max'] = base_kp_res_max
+    result_dict['base_kp_res_std'] = base_kp_res_std
+
+    result_dict['child_kp_res_mean'] = child_kp_res_mean
+    result_dict['child_kp_res_max'] = child_kp_res_max
+    result_dict['child_kp_res_std'] = child_kp_res_std
+    result_dict['child_kp_pre_res_mean'] = child_kp_pre_res_mean
+    result_dict['child_kp_pre_res_max'] = child_kp_pre_res_max
+    result_dict['child_kp_pre_res_std'] = child_kp_pre_res_std
+    result_dict['child_pre_vectors']=child_kp_pre_vectors
+
+    for i, r in enumerate(child_kp_pre_residuals):
+        result_dict[
+            f'child_kp_pre_res_{i}'
+        ] = float(r)
 
     if index == 0:
         print()
-    
+
     return result_dict
 
 def get_child_trans():
@@ -228,7 +309,7 @@ def vis_func(trans_info, cam_fix_rt, pred_cam_rt):
             x, y, z
             in pred_trans_part_kp[part_idx]]
 
-        # urdf_pts + pred r,t 
+        # urdf_pts + pred r,t
         nodes_pcd = o3d.geometry.PointCloud()
         # temp_nodes = ((f_fix @ r_former[part_idx]) @ nodes_list[part_idx, :, :].T).T
         # pred_gt_pts = (pred_r_list[part_idx] @ temp_nodes.T +
@@ -259,7 +340,7 @@ def vis_func(trans_info, cam_fix_rt, pred_cam_rt):
         line_pcd.points = o3d.utility.Vector3dVector(line_points)
         line_pcd_list.append(line_pcd)
         coord_pcd = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5)
-    
+
     cloud_pcd = o3d.geometry.PointCloud()
     cloud_pcd.points = o3d.utility.Vector3dVector(cloud)
     cloud_pcd.paint_uniform_color([1., 0., 0.])
@@ -343,7 +424,7 @@ def calErr(pred_r, pred_t, gt_r, gt_t, sort_part):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()  
+    parser = argparse.ArgumentParser()
     parser.add_argument('--cate_id', type=int, default=1, help='category to show')
     parser.add_argument('--params_dir', type=str, help='the dir for params and kp annotations')
     parser.add_argument('--checkpoint', type=str, default=None, help='test checkpoint')
@@ -375,6 +456,18 @@ if __name__ == '__main__':
     parser.add_argument('--use_gt_kp', action='store_true', help='wheter to use gt kp')
     parser.add_argument('--use_pn', action='store_true')
     parser.add_argument('--use_initial', action='store_true', help='wheter to use initial prediction without refinement')
+    parser.add_argument(
+        '--weight_mode',
+        type=str,
+        default='none',
+        choices=[
+            'none',
+            'manual',
+            'e13b',
+            'e13c'
+        ]
+    )
+
     opt = parser.parse_args()
     seed = 0
 
@@ -437,6 +530,21 @@ if __name__ == '__main__':
     pred_s = []
     gt_s = []
     sample_id = 0
+    # E9
+    pred_child_kp_history = []
+    # E10
+    optimized_joint_state_history = []
+    # E10.5
+    child_pre_vector_history=[]
+    # E13
+    online_weight_history = []
+
+    # E13 current weight
+    current_online_weight = np.ones(opt.num_kp)
+
+    # E13C reliability history
+    reliability_history = []
+
     farthest_sampler = FarthestSampler()
 
     new_model = copy.deepcopy(model)
@@ -477,6 +585,10 @@ if __name__ == '__main__':
     for i, data in enumerate(test_dataloader):
 
         turns += 1
+
+        # if turns>10:
+        #     break
+
         cloud = []
         clouds, norm_part_pts, gt_part_cls, gt_part_r, gt_part_quat, gt_part_t, gt_joint_state, gt_norm_joint_loc, gt_norm_joint_axis, \
         gt_norm_part_kp, gt_scale, gt_center, gt_norm_part_corners, cate, urdf_id, sort_part, link_category_to_idx_map = data
@@ -494,7 +606,7 @@ if __name__ == '__main__':
         base_fix_rt = compose_rt(base_fix_r, base_fix_t)
         flag = 0
         inner_index = i % 29
-        print(f'inner_index: {inner_index}')
+        # print(f'inner_index: {inner_index}')
         if inner_index == 0:
             k_fix = base_fix_rt
             flag = 1
@@ -512,10 +624,10 @@ if __name__ == '__main__':
                 rt_key[part_idx] = compose_rt(r_key[part_idx], t_key[part_idx])
                 real_rt_key[part_idx] = copy.deepcopy(rt_key[part_idx])
                 rt_key[part_idx] = rt_key[part_idx] @ k_fix
-        
+
         key_inner_id = ((inner_index - 1) // 5) * 5 if flag == 0 else 0
         key_dis = inner_index - key_inner_id
-        
+
         clouds = clouds[0].numpy()
         cloud_pcds = []
         gt_part_r = gt_part_r[0].numpy()
@@ -544,7 +656,7 @@ if __name__ == '__main__':
                 cam_fix_rt[part_idx] = cam_fix_rt[0]
                 cam_fix_r[part_idx] = cam_fix_rt[part_idx][:3, :3]
                 cam_fix_t[part_idx] = cam_fix_rt[part_idx][:3, 3]
-            
+
             gt_part_rt[part_idx] = np.linalg.inv(rt_key[part_idx]) @ gt_part_rt[part_idx]
             gt_part_rt[part_idx] = base_fix_rt @ gt_part_rt[part_idx]
             gt_part_r[part_idx] = gt_part_rt[part_idx][:3, :3]
@@ -554,7 +666,7 @@ if __name__ == '__main__':
                 gt_joint_state[0][part_idx] = gt_joint_state[0][part_idx] - key_j_state
             else:
                 gt_joint_state[0][part_idx] = torch.tensor(0.)
-            
+
             cloud_pcd = o3d.geometry.PointCloud()
             cloud_pcd.points = o3d.utility.Vector3dVector(clouds[part_idx])
             cloud_pcd.transform(np.linalg.inv(rt_key[part_idx]))
@@ -571,7 +683,7 @@ if __name__ == '__main__':
 
         temp_cloud = np.concatenate(clouds, axis=0)
         if key_dis == 5 or inner_index == 0:
-            real_rt_key = copy.deepcopy(real_rt)    
+            real_rt_key = copy.deepcopy(real_rt)
 
         c_len = temp_cloud.shape[0]
         if c_len > opt.num_points:
@@ -601,7 +713,7 @@ if __name__ == '__main__':
                     in gt_trans_part_kp[j]]
             o3d.visualization.draw_geometries([coord_pcd] + cloud_pcds + gt_trans_kp_mesh_list)
 
-        
+
         gt_part_r = np.expand_dims(gt_part_r, axis=0)
         gt_part_t = np.expand_dims(gt_part_t, axis=0)
         raw_part_target_quat = np.stack([Rotation.from_matrix(gt_part_r[0][i]).as_quat()
@@ -633,6 +745,15 @@ if __name__ == '__main__':
         gt_norm_joint_loc = gt_norm_joint_loc[0].cpu().numpy()
         gt_norm_joint_axis = gt_norm_joint_axis[0].cpu().numpy()
         pred_trans_part_kp = pred_trans_part_kp[0].cpu().numpy()
+
+        # ======================
+        # E9 save child kp
+        # ======================
+        pred_child_kp_history.append(
+            pred_trans_part_kp[1].copy()
+        )
+
+
         pred_base_r = pred_base_r[0].cpu().numpy()
         pred_base_t = pred_base_t[0].cpu().numpy()
         pred_joint_axis = pred_joint_axis[0].cpu().numpy()
@@ -642,7 +763,7 @@ if __name__ == '__main__':
 
 
         line_pcd_list = []
-        pred_trans_kp_mesh_list = []      
+        pred_trans_kp_mesh_list = []
 
         pred_chlid_rt = [_ for _ in range(num_parts-1)]
         for joint_idx in range(num_parts-1):
@@ -654,14 +775,14 @@ if __name__ == '__main__':
                 pred_chlid_rt[joint_idx] = np.concatenate([np.concatenate([np.eye(3),
                                             np.expand_dims(pred_joint_axis[joint_idx] * j_state_d[joint_idx], 1)], axis=1),
                                             np.array([[0., 0., 0., 1.]])], axis=0)
-        
+
         pred_r_list = [base_transform[:3, :3]] + [
                     np.matmul(pred_chlid_rt[joint_idx], base_transform)[:3, :3]
                     for joint_idx in range(num_parts-1)]
         pred_t_list = [base_transform[:3, -1]] + [
                         np.matmul(pred_chlid_rt[joint_idx], base_transform)[:3, -1]
                         for joint_idx in range(num_parts-1)]
-        
+
         errs = calErr(pred_r_list, pred_t_list, gt_part_r, gt_part_t, sort_part)
         ini_base_r_err = errs[0][0]
         ini_child_r_err = errs[0][1]
@@ -670,23 +791,23 @@ if __name__ == '__main__':
             filtered_count += 1
             turns -= 1
             continue
-            
+
         ini_base_r_error_all += ini_base_r_err
-        
+
         ini_sort_child_r_error_all += ini_child_r_err
 
 
 
-        print(f'sort part: {sort_part}')
-        print(f'ini base r_err: {ini_base_r_err}')
-        print(f'ini child r_err: {ini_child_r_err}')
+        # print(f'sort part: {sort_part}')
+        # print(f'ini base r_err: {ini_base_r_err}')
+        # print(f'ini child r_err: {ini_child_r_err}')
 
         ini_base_t_err = errs[1][0]
         ini_base_t_error_all += ini_base_t_err
         ini_child_t_err = errs[1][1]
         ini_sort_child_t_error_all += ini_child_t_err
-        print(f'ini base t_err: {ini_base_t_err}')
-        print(f'ini child t_err: {ini_child_t_err}')
+        # print(f'ini base t_err: {ini_base_t_err}')
+        # print(f'ini child t_err: {ini_child_t_err}')
 
         norm_part_pts = norm_part_pts[0].cpu().numpy()
 
@@ -700,7 +821,61 @@ if __name__ == '__main__':
         for part_idx in range(num_parts):
             gt_trans_part_kp[part_idx] = (gt_part_r[part_idx] @ gt_norm_part_kp[part_idx].T).T + gt_part_t[part_idx]
         gt_trans_part_kp = np.stack(gt_trans_part_kp)
-            
+
+
+        # ======================
+        # E13 compute current weight
+        # ======================
+
+        if opt.weight_mode == "none":
+
+            adaptive_weight = np.ones(opt.num_kp)
+
+        elif opt.weight_mode == "manual":
+
+            adaptive_weight = np.ones(opt.num_kp)
+
+            adaptive_weight[:4] = np.array(
+                [0.8,1.0,0.8,1.0]
+            )
+
+
+        elif opt.weight_mode == "e13c":
+
+            if len(optimized_joint_state_history) == 0:
+
+
+                # ======================
+                # E13C fix:
+                # keep full keypoint dimension
+                # ======================
+
+                adaptive_weight = np.ones(
+                    opt.num_kp
+                )
+
+            else:
+
+                all_weights = compute_online_weight(
+                    np.array(pred_child_kp_history),
+                    np.array(optimized_joint_state_history)
+                )
+
+                tmp_weight = all_weights[-1]
+                # print(
+                #     "DEBUG E13 UPDATED",
+                #     i,
+                #     tmp_weight
+                # )
+                # child weight -> full keypoint weight
+                adaptive_weight = np.ones(opt.num_kp)
+
+                adaptive_weight[:len(tmp_weight)] = tmp_weight
+
+
+        online_weight_history.append(
+            adaptive_weight.copy()
+        )
         result = dict(
                     sample_id=i,
                     pred_cls=pred_cls[0].cpu().numpy(),
@@ -725,7 +900,19 @@ if __name__ == '__main__':
         if flag == 1:
             norm_kp = pred_trans_part_kp
             print()
-        optimize_result = get_vis_resource(i, result, norm_kp, new_model, opt, 'cpu', norm_part_pts, farthest_sampler)
+        optimize_result = get_vis_resource(i, result, norm_kp, new_model, opt, 'cpu', norm_part_pts, farthest_sampler,adaptive_weight)
+
+        # ======================
+        # E10 save optimized joint state
+        # ======================
+        optimized_joint_state_history.append(
+            optimize_result['new_pred_joint_state'].copy()
+        )
+
+        child_pre_vector_history.append(
+            optimize_result['child_pre_vectors'].copy()
+        )
+
 
         new_pred_r = optimize_result['pred_r_list']
         new_pred_t = optimize_result['pred_t_list']
@@ -736,6 +923,19 @@ if __name__ == '__main__':
         new_child_r_err = new_errs[0][1]
         new_base_t_err = new_errs[1][0]
         new_child_t_err = new_errs[1][1]
+
+        # print(
+        #     f"frame={i:03d} "
+        #     f"key_dis={key_dis} "
+        #     f"child_err={new_child_r_err:.3f} "
+        #     f"kp_mean={optimize_result['child_kp_res_mean']:.5f} "
+        #     f"kp_max={optimize_result['child_kp_res_max']:.5f} "
+        #     f"kp_std={optimize_result['child_kp_res_std']:.5f} "
+        #     f"pre_mean={optimize_result['child_kp_pre_res_mean']:.5f} "
+        #     f"post_mean={optimize_result['child_kp_res_mean']:.5f} "
+        # )
+
+
         if not (np.isnan(new_base_r_err) or np.isnan(new_child_r_err)):
             new_sort_child_r_error_all += new_child_r_err
             new_base_r_error_all += new_base_r_err
@@ -743,33 +943,33 @@ if __name__ == '__main__':
 
         new_base_t_error_all += new_base_t_err
         new_sort_child_t_error_all += new_child_t_err
-        print(f'new base r_err: {new_base_r_err}')
-        print(f'new child r_err: {new_child_r_err}')
-        print(f'new base t_err: {new_base_t_err}')
-        print(f'new child t_err: {new_child_t_err}')
+        # print(f'new base r_err: {new_base_r_err}')
+        # print(f'new child r_err: {new_child_r_err}')
+        # print(f'new base t_err: {new_base_t_err}')
+        # print(f'new child t_err: {new_child_t_err}')
 
 
-        
+
         pred_cam_rt = [np.matmul(rt_key[part_idx], new_pred_rt[part_idx])
                         for part_idx in range(num_parts)]
         pred_cam_r = [pred_cam_rt[part_idx][:3, :3] for part_idx in range(num_parts)]
         pred_cam_t = [pred_cam_rt[part_idx][:3, 3] for part_idx in range(num_parts)]
-        
+
         cam_errs = calErr(np.stack(pred_cam_r), np.stack(pred_cam_t), np.stack(cam_fix_r), np.stack(cam_fix_t), sort_part)
         cam_base_r_err = cam_errs[0][0]
         cam_child_r_err = cam_errs[0][1]
         if not (np.isnan(cam_base_r_err) or np.isnan(cam_child_r_err)):
             cam_base_r_error_all += cam_base_r_err
             cam_sort_child_r_error_all += cam_child_r_err
-            print(f'cam base r_err: {cam_base_r_err}')
-            print(f'cam child r_err: {cam_child_r_err}')
+            # print(f'cam base r_err: {cam_base_r_err}')
+            # print(f'cam child r_err: {cam_child_r_err}')
 
         cam_base_t_err = cam_errs[1][0]
         cam_base_t_error_all += cam_base_t_err
         cam_child_t_err = cam_errs[1][1]
         per_frame_results.append([
             i,
-            inner_index,
+            inner_index,   #row[1]是inner_index
             key_dis,
             int(urdf_id[0].cpu().numpy()),
 
@@ -786,13 +986,24 @@ if __name__ == '__main__':
             cam_base_r_err,
             cam_child_r_err,
             cam_base_t_err,
-            cam_child_t_err
+            cam_child_t_err,
+
+            optimize_result['child_kp_res_mean'],
+            optimize_result['child_kp_res_max'],
+            optimize_result['child_kp_res_std'],
+            optimize_result['child_kp_pre_res_mean'],
+            optimize_result['child_kp_pre_res_max'],
+            optimize_result['child_kp_pre_res_std'],
+            *[
+                optimize_result[f'child_kp_pre_res_{i}']
+                for i in range(4)
+            ]
         ])
 
 
         cam_sort_child_t_error_all += cam_child_t_err
-        print(f'cam base t_err: {cam_base_t_err}')
-        print(f'cam child t_err: {cam_child_t_err}')
+        # print(f'cam base t_err: {cam_base_t_err}')
+        # print(f'cam child t_err: {cam_child_t_err}')
         print()
 
         if inner_index == 28:
@@ -838,7 +1049,7 @@ if __name__ == '__main__':
 
         writer.writerow([
             "sample_id",
-            "frame_id",
+            "inner_index",
             "key_dis",
             "urdf_id",
             "num_points",
@@ -857,7 +1068,17 @@ if __name__ == '__main__':
             "cam_base_r",
             "cam_child_r",
             "cam_base_t",
-            "cam_child_t"
+            "cam_child_t",
+            "child_kp_res_mean",
+            "child_kp_res_max",
+            "child_kp_res_std",
+            "child_kp_pre_res_mean",
+            "child_kp_pre_res_max",
+            "child_kp_pre_res_std",
+            "child_kp_pre_res_0",
+            "child_kp_pre_res_1",
+            "child_kp_pre_res_2",
+            "child_kp_pre_res_3",
         ])
 
         for row in per_frame_results:
@@ -883,7 +1104,17 @@ if __name__ == '__main__':
                 row[12],         # cam_base_r
                 row[13],         # cam_child_r
                 row[14],         # cam_base_t
-                row[15]          # cam_child_t
+                row[15],         # cam_child_t
+                row[16],   # child_kp_res_mean
+                row[17],   # child_kp_res_max
+                row[18],   # child_kp_res_std
+                row[19],   # child_kp_pre_res_mean
+                row[20],   # child_kp_pre_res_max
+                row[21],   # child_kp_pre_res_std
+                row[22],
+                row[23],
+                row[24],
+                row[25],
             ])
     print("Per-frame CSV保存位置:", per_frame_csv_path)
     print(f'turn:{turns}')
@@ -896,7 +1127,7 @@ if __name__ == '__main__':
     # project_root = osp.abspath(
     #     osp.join(osp.dirname(__file__), "..")
     # )
-    
+
     project_root = PROJECT_ROOT
 
     csv_dir = osp.join(
@@ -907,13 +1138,13 @@ if __name__ == '__main__':
     csv_path = osp.join(
         csv_dir,
         "results.csv"
-    )    
-    
+    )
+
     os.makedirs(
         osp.dirname(csv_path),
         exist_ok=True
     )
-   
+
 
     print("当前工作目录:", os.getcwd())
     print("项目根目录:", project_root)
@@ -969,10 +1200,143 @@ if __name__ == '__main__':
     print()
     print(f"filtered frames (ini_base_r > 30): {filtered_count}")
 
+    e9_save_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "pred_child_kp_history.npy"
+    )
+
+    np.save(
+        e9_save_path,
+        np.array(pred_child_kp_history)
+    )
+
+    print(
+        "E9 keypoint history saved:",
+        e9_save_path,
+        np.array(pred_child_kp_history).shape
+    )
+
+    e10_theta_save_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "optimized_joint_state_history.npy"
+    )
 
 
-        
-                
-            
+    np.save(
+        e10_theta_save_path,
+        np.array(optimized_joint_state_history)
+    )
 
 
+    print(
+        "E10 joint state history saved:",
+        e10_theta_save_path,
+        np.array(optimized_joint_state_history).shape
+    )
+
+
+    # ============================
+    # E10.5 save child pre vectors
+    # ============================
+
+    child_pre_vector_save_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "child_pre_vector_history.npy"
+    )
+
+    np.save(
+        child_pre_vector_save_path,
+        np.array(
+            child_pre_vector_history,
+            dtype=object
+        ),
+        allow_pickle=True
+    )
+
+    # print(
+    #     "child pre vector history saved:",
+    #     child_pre_vector_save_path,
+    #     "length:",
+    #     len(child_pre_vector_history)
+    # )
+
+
+    # ======================
+    # E13 save online weights
+    # ======================
+
+    e13_weight_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "online_weight_history.npy"
+    )
+
+
+    np.save(
+        e13_weight_path,
+        np.array(
+            online_weight_history
+        )
+    )
+
+
+    # print(
+    #     "E13 online weight saved:",
+    #     e13_weight_path,
+    #     "length:",
+    #     len(online_weight_history)
+    # )
+
+    # ==================================================
+    # E13C ADD:
+    # save reliability history for Figure 3
+    # ==================================================
+
+    reliability_path = osp.join(
+        PROJECT_ROOT,
+        "failure_analysis",
+        "results",
+        "reliability_history.npy"
+    )
+
+
+# ==================================================
+# E13C save reliability
+# ==================================================
+
+    if opt.weight_mode == "e13c":
+
+        if hasattr(
+            compute_online_weight,
+            "reliability_history"
+        ):
+
+            np.save(
+                reliability_path,
+                compute_online_weight.reliability_history
+            )
+
+            print(
+                "E13 reliability saved:",
+                compute_online_weight.reliability_history.shape
+            )
+
+        else:
+
+            print(
+                "Warning: no reliability history generated"
+            )
+
+    else:
+
+        print(
+            "Skip reliability saving for:",
+            opt.weight_mode
+        )
